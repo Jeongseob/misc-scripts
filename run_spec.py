@@ -8,16 +8,17 @@ from subprocess import *
 from time import localtime, strftime
 from threading import Thread, Lock
 
+cpu_id = [ 0x01, 0x02, 0x04, 0x08] 
 SPEC_ROOT_DIR = '/home/jeongseob/SPECCPU_2006'
-SPEC_RUN_PATH = SPEC_ROOT_DIR + "/run_spec.sh" 
 
 def usage():
-	print 'Usage: %s -i workloads.cfg -s hostname -u username' % sys.argv[0]
+	print 'Usage: %s -i workloads.cfg -t hostname -u username' % sys.argv[0]
 
 #
 # Each thread runs a benchmark
 # Note: if there is a thread which does not complete its job, the other threads run their benchmark again 
 #
+
 class run_spec(Thread):
 	def __init__(self, ThreadID, BenchID):
 		super(run_spec, self).__init__()
@@ -35,7 +36,12 @@ class run_spec(Thread):
 		while not all (is_completed) :
 			cmd = 'cd ' + SPEC_ROOT_DIR
 			cmd = cmd + '; source shrc'
-			cmd = cmd + '; ' + spec_run_cmd + ' ' + self.benchmark + ' > ' + spec_output_path + '/' + self.benchmark + '.' + benchname + '.specout.' + str(self.iteration)
+			if with_perf:
+				cmd = cmd + '; taskset 0x' + str( cpu_id [self.threadID] ) + ' ' + perf_options + ' ' + spec_run_cmd + ' ' + self.benchmark + ' > ' + spec_output_path + '/' + self.benchmark + str(self.threadID) + '.' + benchname + '.specout.' + str(self.iteration)
+			else:
+				cmd = cmd + '; taskset 0x' + str( cpu_id [self.threadID] ) + ' ' + spec_run_cmd + ' ' + self.benchmark + ' > ' + spec_output_path + '/' + self.benchmark + str(self.threadID) + '.' + benchname + '.specout.' + str(self.iteration)
+				#without CPU pinning
+				#cmd = cmd + '; ' + spec_run_cmd + ' ' + self.benchmark + ' > ' + spec_output_path + '/' + self.benchmark + '.' + benchname + '.specout.' + str(self.iteration)
 
 			date = strftime("%H:%M:%S", localtime())
 
@@ -48,10 +54,34 @@ class run_spec(Thread):
 			session.get_pty()
 			session.exec_command(cmd)
 			stdout = session.makefile('rb', -1)
+			if verbose:
+				print stdout.read()
 			stdout.channel.recv_exit_status()
 			is_completed[self.threadID] = True 
 			session.close()
 			self.iteration += 1
+
+		print 'All applications completed'
+		# Kill running processes
+		session = self.transport.open_session()
+		session.get_pty()
+		cmd = 'pkill specinvoke; pkill runspec'
+		session.exec_command(cmd)
+		stdout = session.makefile('rb', -1)
+		if verbose:
+			print stdout.read()
+		stdout.channel.recv_exit_status()
+		session.close()
+
+		session = self.transport.open_session()
+		session.get_pty()
+		cmd = 'pkill %s' % self.benchmark
+		session.exec_command(cmd)
+		stdout = session.makefile('rb', -1)
+		if verbose:
+			print stdout.read()
+		stdout.channel.recv_exit_status()
+		session.close()
 
 
 #
@@ -60,24 +90,27 @@ class run_spec(Thread):
 
 def main(argv=None):
 
-	global spec_output_path, spec_run_cmd
+	global spec_output_path, spec_run_cmd, perf_options
 	global benchname
 	global is_completed
 	global target_host, user, passwd
 	global verbose
+	global with_perf
 
 	try:
-		opts, args = getopt.getopt(sys.argv[1:], 'h:i:t:u:c:v', ['help', 'input='])
+		opts, args = getopt.getopt(sys.argv[1:], 'h:i:t:u:c:pv', ['help', 'input='])
 	except getopt.GetoptError as err:
 		print (err)
 		sys.exit(1)
 
-	target_host = 'ahn-vm01'
+	target_host = 'clarity09'
 	user = 'jeongseob'
-	input = 'workloads'
+	input = 'spec_list'
 	verbose = False
 	spec_cfg = 'spec.cfg'
 	spec_run_cmd = 'runspec --action=run --tune=base --noreportable'
+	perf_options = 'perf stat -e cache-misses'
+	with_perf = False
 
 	for o, a in opts:
 		if o == '-v':
@@ -93,6 +126,8 @@ def main(argv=None):
 			user = a;
 		elif o in ('-c', '--cfg'):
 			spec_cfg = a;	
+		elif o in ('-p', '--perf'):
+			with_perf = True;	
 		else:
 			assert False, 'unhandled options'
 
@@ -150,10 +185,10 @@ def main(argv=None):
 	stdin.write(passwd + '\n')
 	stdin.flush()
 	session.close()
-
+	
 	with open(input) as fp:
 		for line in fp:
-			if line[0][0] == '#':
+			if line[0][0] == '#' or line in ['\n', '\r\n']:
 				continue
 			line = line.strip('\n')
 			line = line.replace(' ', '')
@@ -175,6 +210,8 @@ def main(argv=None):
 	
 			benchname = '-'.join(str(e) for e in benchmark_list)
 			print "Run %s " % benchname
+
+			perf_options = perf_options + ' -o ' + spec_output_path + '/' + benchname + '.perf'
 		
 			# Create threads for each benchmark	
 			threads = []
