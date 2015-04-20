@@ -35,14 +35,15 @@ class run_spec(Thread):
 
 		while not all (is_completed) :
 			cmd = 'cd ' + SPEC_ROOT_DIR
-			cmd = cmd + '; source shrc'
+			cmd = cmd + '; source shrc;'
 			if with_perf:
-				cmd = cmd + '; taskset 0x' + str( cpu_id [self.threadID] ) + ' ' + perf_options + ' ' + spec_run_cmd + ' ' + self.benchmark + ' > ' + spec_output_path + '/' + self.benchmark + str(self.threadID) + '.' + benchname + '.specout.' + str(self.iteration)
-			else:
-				cmd = cmd + '; taskset 0x' + str( cpu_id [self.threadID] ) + ' ' + spec_run_cmd + ' ' + self.benchmark + ' > ' + spec_output_path + '/' + self.benchmark + str(self.threadID) + '.' + benchname + '.specout.' + str(self.iteration)
-				#without CPU pinning
-				#cmd = cmd + '; ' + spec_run_cmd + ' ' + self.benchmark + ' > ' + spec_output_path + '/' + self.benchmark + '.' + benchname + '.specout.' + str(self.iteration)
-
+				cmd = cmd + ' ' + perf_options 
+				
+			if with_pinning:
+				cmd = cmd + ' taskset 0x' + str( cpu_id [self.threadID] ) 
+			
+			cmd = cmd + ' ' + spec_run_cmd + ' ' + self.benchmark + ' > ' + spec_output_path + '/' + self.benchmark + str(self.threadID) + '.' + benchname + '.specout.' + str(self.iteration)
+			
 			date = strftime("%H:%M:%S", localtime())
 
 			if verbose :
@@ -52,8 +53,10 @@ class run_spec(Thread):
 	
 			session = self.transport.open_session()
 			session.get_pty()
-			session.exec_command(cmd)
+			session.exec_command(cmd)			
+			stdin = session.makefile('wb', -1)
 			stdout = session.makefile('rb', -1)
+			stdin.write(passwd + '\n')
 			if verbose:
 				print stdout.read()
 			stdout.channel.recv_exit_status()
@@ -95,7 +98,7 @@ def main(argv=None):
 	global is_completed
 	global target_host, user, passwd
 	global verbose
-	global with_perf
+	global with_perf, with_pinning
 
 	try:
 		opts, args = getopt.getopt(sys.argv[1:], 'h:i:t:u:c:pv', ['help', 'input='])
@@ -109,8 +112,8 @@ def main(argv=None):
 	verbose = False
 	spec_cfg = 'spec.cfg'
 	spec_run_cmd = 'runspec --action=run --tune=base --noreportable'
-	perf_options = 'perf stat -e cache-misses'
 	with_perf = False
+	with_pinning = True
 
 	for o, a in opts:
 		if o == '-v':
@@ -211,7 +214,7 @@ def main(argv=None):
 			benchname = '-'.join(str(e) for e in benchmark_list)
 			print "Run %s " % benchname
 
-			perf_options = perf_options + ' -o ' + spec_output_path + '/' + benchname + '.perf'
+			perf_options = 'perf stat -e cache-misses -o ' + spec_output_path + '/' + benchname + '.perf'
 		
 			# Create threads for each benchmark	
 			threads = []
